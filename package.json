@@ -1,13 +1,16 @@
 {
   "name": "zosma-anti-encryption",
   "version": "2.0.0",
-  "description": "Live RSA break: real RSA + Shor order-finding on IBM Quantum hardware",
+  "description": "Encryption-level narratives, taxonomy break audits, and live toy-RSA Shor on IBM Quantum",
   "type": "module",
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
     "demo": "tsx src/index.ts --modulus 15 --message ZOSMA --shots 1024 --max-attempts 2",
     "factor": "tsx src/factor.ts",
+    "audit": "tsx src/audit-cli.ts",
+    "audit:insecure": "tsx src/audit-cli.ts audit --profile insecure",
+    "audit:hardened": "tsx src/audit-cli.ts audit --profile hardened",
     "quantum:install": "python -m pip install -r quantum/requirements.txt",
     "quantum:factor": "python quantum/shor_live.py"
   },

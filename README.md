@@ -126,6 +126,25 @@ Optional:
 
 ---
 
+## Encryption levels & taxonomy audits
+
+ZOSMA catalogs **operational encryption levels** (classical → AEAD → PKI → post-quantum → tokens → quantum threat) and maps the **CODE_NARRATIVE_PROTOCOL flaw taxonomy** onto breaks of each level’s security workflow.
+
+| Command | Purpose |
+| --- | --- |
+| `npm run audit -- levels` | List encryption levels |
+| `npm run audit -- narratives` | Print narratives (promise + workflow) |
+| `npm run audit -- audit --profile insecure` | Findings where controls are absent |
+| `npm run audit -- audit --profile hardened` | Passes when controls are claimed |
+| `npm run audit -- summary` | Old vs new posture |
+| `npm run audit -- break sym.aead.gcm 4.6.2` | One break edge explained |
+
+Docs: [docs/ENCRYPTION_NARRATIVES.md](./docs/ENCRYPTION_NARRATIVES.md), [docs/TAXONOMY_BREAKS_CRYPTO.md](./docs/TAXONOMY_BREAKS_CRYPTO.md).
+
+The taxonomy breaks **implementation workflows** (nonce reuse, missing AEAD, JWT claims, IDOR on keys, secret logs). It does **not** magically invert AES. Live mathematical break in this repo remains **toy RSA via Shor**.
+
+---
+
 ## Quickstart (live QPU)
 
 ```bash
