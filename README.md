@@ -126,6 +126,18 @@ Optional:
 
 ---
 
+## Secret exposure scanner (authorized only)
+
+Scan HTML/JS for exposed keys. Classifies public vs secret. Tries AES keys **only** on optional local ciphertext. **Never** calls cloud APIs with found secrets.
+
+```bash
+npm run scan:demo
+# or, only on properties you own:
+npm run scan -- https://example.com --i-own-this
+```
+
+---
+
 ## High-asset encryption (hardest tiers)
 
 Stacks that protect banks, governments, payments, and national systems — and how **taxonomy workflow flaws** void them without inverting AES-256:

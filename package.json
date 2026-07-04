@@ -20,6 +20,8 @@
     "gcm-bypass": "tsx src/gcm-bypass-cli.ts",
     "gcm-beyond": "tsx src/gcm-beyond-cli.ts",
     "gcm-foundational": "tsx src/gcm-foundational-cli.ts",
+    "scan": "tsx src/scan-cli.ts",
+    "scan:demo": "tsx src/scan-cli.ts --fixture --with-local-aes-demo",
     "quantum:install": "python -m pip install -r quantum/requirements.txt",
     "quantum:factor": "python quantum/shor_live.py"
   },
