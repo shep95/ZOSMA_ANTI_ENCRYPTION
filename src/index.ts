@@ -1,49 +1,61 @@
 /**
- * Live end-to-end attack:
- * real RSA → encrypt → factor N on IBM Quantum with Shor → recover d → decrypt.
+ * Live end-to-end attack CLI.
+ * Orchestrates the attack state machine; never blocks the event loop on crypto math.
  */
 
-import {
-  decryptMessage,
-  encryptMessage,
-  formatCiphertext,
-  generateLiveKeypair,
-  recoverPrivateKey,
-} from "./rsa.js";
-import { shorsBreaker } from "./shor.js";
+import { AttackError } from "./errors.js";
+import { runAttack } from "./attack.js";
 
 function parseArgs(argv: string[]): {
   modulus: 15 | 21;
   message: string;
   shots: number;
   backend?: string;
+  timeoutMs: number;
+  maxAttempts: number;
 } {
   let modulus: 15 | 21 = 15;
   let message = "ZOSMA";
-  let shots = 4096;
+  let shots = 1024;
   let backend: string | undefined;
+  let timeoutMs = 30 * 60 * 1000;
+  let maxAttempts = 2;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--modulus" || arg === "-n") {
-      const value = Number(argv[++i]);
+      const value = Number.parseInt(argv[++i] ?? "", 10);
       if (value !== 15 && value !== 21) {
-        throw new Error("Live moduli supported today: 15 or 21");
+        throw new AttackError("invalid_args", "Live moduli supported today: 15 or 21");
       }
       modulus = value;
     } else if (arg === "--message" || arg === "-m") {
       message = argv[++i] ?? message;
     } else if (arg === "--shots") {
-      shots = Number(argv[++i]);
+      shots = Number.parseInt(argv[++i] ?? "", 10);
     } else if (arg === "--backend") {
       backend = argv[++i];
+    } else if (arg === "--timeout-ms") {
+      timeoutMs = Number.parseInt(argv[++i] ?? "", 10);
+    } else if (arg === "--max-attempts") {
+      maxAttempts = Number.parseInt(argv[++i] ?? "", 10);
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     }
   }
 
-  return { modulus, message, shots, backend };
+  if (!Number.isInteger(shots) || shots < 1) {
+    throw new AttackError("invalid_args", "shots must be a positive integer");
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000) {
+    throw new AttackError("invalid_args", "timeout-ms must be >= 1000");
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 8) {
+    throw new AttackError("invalid_args", "max-attempts must be in [1, 8]");
+  }
+
+  return { modulus, message, shots, backend, timeoutMs, maxAttempts };
 }
 
 function printHelp(): void {
@@ -52,11 +64,13 @@ function printHelp(): void {
 Live RSA break using Shor's algorithm on IBM Quantum hardware.
 
 Options:
-  -n, --modulus <15|21>  RSA modulus (default: 15)
-  -m, --message <text>   Plaintext (default: ZOSMA)
-      --shots <k>        QPU shots (default: 4096)
-      --backend <name>   IBM backend (default: least busy real QPU)
-  -h, --help             Show help
+  -n, --modulus <15|21>   RSA modulus (default: 15)
+  -m, --message <text>    Plaintext (default: ZOSMA)
+      --shots <k>         QPU shots (default: 1024)
+      --backend <name>    IBM backend (default: least busy real QPU)
+      --timeout-ms <ms>   Wall-clock budget (default: 1800000)
+      --max-attempts <n>  Max QPU base attempts (default: 2)
+  -h, --help              Show help
 
 Requires:
   IBM_QUANTUM_TOKEN   API token from https://quantum.cloud.ibm.com/
@@ -65,55 +79,44 @@ Requires:
 }
 
 async function main(): Promise<void> {
-  const { modulus, message, shots, backend } = parseArgs(process.argv.slice(2));
+  const config = parseArgs(process.argv.slice(2));
+  const controller = new AbortController();
+
+  const onSignal = () => controller.abort();
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   if (!process.env.IBM_QUANTUM_TOKEN && !process.env.QISKIT_IBM_TOKEN) {
     console.warn(
-      "Warning: IBM_QUANTUM_TOKEN is not set. The quantum step will fail unless Qiskit has a saved account.\n",
+      "IBM_QUANTUM_TOKEN is not set — quantum step requires a live IBM Quantum account.\n",
     );
   }
 
-  console.log("=== Act 1: Build a live-hardware RSA lock ===");
-  const { publicKey, privateKey, p, q } = generateLiveKeypair(modulus);
-  console.log(`Secret primes p, q: ${p}, ${q}`);
-  console.log(`Public key  (e, N): (${publicKey.e}, ${publicKey.n})`);
-  console.log(`Private key (d, N): (${privateKey.d}, ${privateKey.n})`);
+  try {
+    const result = await runAttack({
+      ...config,
+      signal: controller.signal,
+      onStatus: (line) => console.log(line),
+    });
 
-  console.log("\n=== Act 2: Lock a message (real RSA) ===");
-  console.log(`Plaintext: ${message}`);
-  const ciphertext = encryptMessage(message, publicKey);
-  console.log(`Encrypted digits: ${formatCiphertext(ciphertext)}`);
-
-  const legit = decryptMessage(ciphertext, privateKey);
-  console.log(`Decrypted with real private key: ${legit}`);
-  if (legit !== message) {
-    throw new Error("Legitimate RSA decrypt failed");
+    console.log("\n--- result ---");
+    console.log(`correlation_id: ${result.correlationId}`);
+    console.log(`plaintext: ${result.plaintext}`);
+    console.log(`factors: (${result.factors.p}, ${result.factors.q})`);
+    console.log(`backend: ${result.factors.backend ?? "n/a"}`);
+    console.log(`job_id: ${result.factors.jobId ?? "n/a"}`);
+    console.log(`duration_ms: ${result.durationMs}`);
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
   }
-
-  console.log("\n=== Act 3: Factor N on live IBM Quantum (Shor) ===");
-  console.log("Submitting order-finding circuit to a real QPU…");
-  const factors = await shorsBreaker(publicKey.n, { shots, backend });
-  console.log(`Mode: ${factors.mode}`);
-  if (factors.backend) console.log(`Backend: ${factors.backend}`);
-  if (factors.jobId) console.log(`Job ID: ${factors.jobId}`);
-  if (factors.order != null) console.log(`Recovered order r: ${factors.order}`);
-  console.log(`Factored N=${publicKey.n} into (${factors.p}, ${factors.q})`);
-
-  console.log("\n=== Act 4: Forge private key and read the message ===");
-  const crackedKey = recoverPrivateKey(publicKey, factors.p, factors.q);
-  console.log(`Recovered private exponent d: ${crackedKey.d}`);
-
-  const cracked = decryptMessage(ciphertext, crackedKey);
-  console.log(`Message cracked via live Shor: ${cracked}`);
-
-  if (cracked !== message) {
-    throw new Error("Crack failed: plaintext mismatch");
-  }
-
-  console.log("\nSuccess: ciphertext recovered using factors from a live quantum job.");
 }
 
 main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : err);
+  if (err instanceof AttackError) {
+    console.error(`[${err.code}] ${err.message}`);
+  } else {
+    console.error(err instanceof Error ? err.message : err);
+  }
   process.exit(1);
 });

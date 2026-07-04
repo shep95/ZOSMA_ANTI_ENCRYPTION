@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
-    "demo": "tsx src/index.ts --modulus 15 --message ZOSMA",
+    "demo": "tsx src/index.ts --modulus 15 --message ZOSMA --shots 1024 --max-attempts 2",
     "factor": "tsx src/factor.ts",
     "quantum:install": "python -m pip install -r quantum/requirements.txt",
     "quantum:factor": "python quantum/shor_live.py"

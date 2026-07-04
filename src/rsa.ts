@@ -101,13 +101,22 @@ export function decodeMessage(digits: bigint[], n: bigint): string {
   return new TextDecoder().decode(bytes);
 }
 
+const digitsPerByteCache = new Map<string, number>();
+
 function digitsPerByte(n: bigint): number {
+  const key = n.toString();
+  const cached = digitsPerByteCache.get(key);
+  if (cached != null) return cached;
+
   let capacity = 1n;
   let count = 0;
+  // Bound loop: n>=2 ⇒ count ≤ 8 for byte encoding.
   while (capacity < 256n) {
     capacity *= n;
     count += 1;
+    if (count > 64) throw new Error(`digitsPerByte diverged for n=${n}`);
   }
+  digitsPerByteCache.set(key, count);
   return count;
 }
 

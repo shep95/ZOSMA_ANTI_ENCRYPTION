@@ -166,8 +166,10 @@ Expect queue time on the public IBM Quantum fleet.
 | --- | --- | --- |
 | `-n`, `--modulus` | `15` or `21` | `15` |
 | `-m`, `--message` | Plaintext | `ZOSMA` |
-| `--shots` | QPU shots | `4096` |
+| `--shots` | QPU shots | `1024` |
 | `--backend` | Explicit IBM backend name | least-busy **real** QPU |
+| `--max-attempts` | Max QPU base attempts | `2` |
+| `--timeout-ms` | Wall-clock budget for the quantum engine | `1800000` |
 
 ---
 

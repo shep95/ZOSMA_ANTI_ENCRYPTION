@@ -55,20 +55,22 @@ export function isPrime(n: bigint): boolean {
   return true;
 }
 
-/** Inclusive random bigint in [min, max]. */
+/** Inclusive random bigint in [min, max] via rejection sampling (unbiased). */
 export function randomBigInt(min: bigint, max: bigint): bigint {
   if (max < min) throw new Error("max must be >= min");
   const range = max - min + 1n;
   const bits = range.toString(2).length;
   const bytes = Math.ceil(bits / 8);
+  const limit = 1n << BigInt(bytes * 8);
 
   for (;;) {
     const buf = new Uint8Array(bytes);
     crypto.getRandomValues(buf);
     let value = 0n;
     for (const b of buf) value = (value << 8n) | BigInt(b);
-    value %= range * 2n; // slight bias reduction for small ranges
-    if (value < range) return min + value;
+    // Reject values in the biased tail of the byte range.
+    if (value >= limit - (limit % range)) continue;
+    return min + (value % range);
   }
 }
 
