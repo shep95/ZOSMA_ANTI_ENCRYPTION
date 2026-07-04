@@ -1,0 +1,20 @@
+{
+  "name": "quantum-cracking-encryption",
+  "version": "1.0.0",
+  "description": "Educational demo: break toy RSA by factoring N with Shor's algorithm (classical period finding)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "demo": "tsx src/index.ts --bit-length 8 --message \"7enTropy7\"",
+    "factor": "tsx src/factor.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
