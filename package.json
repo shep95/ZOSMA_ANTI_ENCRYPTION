@@ -11,6 +11,10 @@
     "audit": "tsx src/audit-cli.ts",
     "audit:insecure": "tsx src/audit-cli.ts audit --profile insecure",
     "audit:hardened": "tsx src/audit-cli.ts audit --profile hardened",
+    "high-asset": "tsx src/high-asset-cli.ts",
+    "high-asset:test": "tsx src/high-asset-cli.ts self-test",
+    "high-asset:broken": "tsx src/high-asset-cli.ts audit --profile broken",
+    "high-asset:hardened": "tsx src/high-asset-cli.ts audit --profile hardened",
     "quantum:install": "python -m pip install -r quantum/requirements.txt",
     "quantum:factor": "python quantum/shor_live.py"
   },

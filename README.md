@@ -126,6 +126,23 @@ Optional:
 
 ---
 
+## High-asset encryption (hardest tiers)
+
+Stacks that protect banks, governments, payments, and national systems — and how **taxonomy workflow flaws** void them without inverting AES-256:
+
+```bash
+npm run high-asset -- tiers
+npm run high-asset -- audit --profile broken
+npm run high-asset -- audit --profile hardened
+npm run high-asset -- self-test
+```
+
+Docs: [docs/HIGH_ASSET_ENCRYPTION.md](./docs/HIGH_ASSET_ENCRYPTION.md), [docs/HIGH_ASSET_CODE_NARRATIVE.md](./docs/HIGH_ASSET_CODE_NARRATIVE.md).
+
+Workable lab code uses **real AES-256-GCM**, proves nonce-reuse keystream leakage (`C1⊕C2 = P1⊕P2`), and enforces fail-closed tag verification.
+
+---
+
 ## Encryption levels & taxonomy audits
 
 ZOSMA catalogs **operational encryption levels** (classical → AEAD → PKI → post-quantum → tokens → quantum threat) and maps the **CODE_NARRATIVE_PROTOCOL flaw taxonomy** onto breaks of each level’s security workflow.
