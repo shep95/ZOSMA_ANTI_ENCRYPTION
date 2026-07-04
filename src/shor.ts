@@ -1,61 +1,123 @@
-import { gcd, modPow, randomBigInt } from "./math.js";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type Factors = { p: bigint; q: bigint };
 
-/**
- * Classical period finding for f(x) = a^x mod n.
- * Returns the smallest positive r such that a^r ≡ 1 (mod n).
- *
- * On a quantum computer this is Shor's period-finding subroutine.
- * For educational moduli we compute the order classically.
- */
-export function findPeriod(a: bigint, n: bigint): bigint {
-  if (gcd(a, n) !== 1n) {
-    throw new Error("a and n must be coprime to have an order modulo n");
-  }
+export type ShorResult = Factors & {
+  backend: string | null;
+  jobId: string | null;
+  mode: string;
+  order: number | null;
+  base: number | null;
+  shots: number;
+  raw: Record<string, unknown>;
+};
 
-  let value = 1n;
-  for (let r = 1n; r <= n; r++) {
-    value = (value * a) % n;
-    if (value === 1n) return r;
-  }
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SHOR_SCRIPT = path.join(ROOT, "quantum", "shor_live.py");
 
-  throw new Error(`No period found for a=${a}, n=${n}`);
-}
+export type ShorOptions = {
+  shots?: number;
+  backend?: string;
+  pythonPath?: string;
+};
 
 /**
- * Factor n using Shor's classical control flow:
- * random base → period → gcd(a^(r/2) ± 1, n).
+ * Factor n with live Shor's algorithm on IBM Quantum hardware.
+ * Spawns quantum/shor_live.py — real QPE circuit, real QPU.
  */
-export function shorsBreaker(n: bigint, maxAttempts = 10_000): Factors {
+export async function shorsBreaker(n: bigint, options: ShorOptions = {}): Promise<ShorResult> {
   if (n <= 1n) throw new Error("n must be > 1");
-  if (n % 2n === 0n) return { p: 2n, q: n / 2n };
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const a = randomBigInt(2n, n - 2n);
-    const g = gcd(a, n);
+  const args = [SHOR_SCRIPT, "--n", n.toString(), "--json"];
+  if (options.shots != null) args.push("--shots", String(options.shots));
+  if (options.backend) args.push("--backend", options.backend);
 
-    if (g !== 1n) {
-      return orderedFactors(g, n / g);
-    }
+  const python = options.pythonPath ?? process.env.PYTHON ?? "python";
+  const payload = await runPython(python, args);
+  const data = JSON.parse(payload) as Record<string, unknown>;
 
-    const r = findPeriod(a, n);
-    if (r % 2n !== 0n) continue;
-
-    const half = modPow(a, r / 2n, n);
-    // a^(r/2) ≡ -1 (mod n) is unusable
-    if (half === n - 1n) continue;
-
-    const p = gcd(half + 1n, n);
-    const q = gcd(half - 1n, n);
-
-    if (p > 1n && p < n) return orderedFactors(p, n / p);
-    if (q > 1n && q < n) return orderedFactors(q, n / q);
+  if (typeof data.error === "string") {
+    throw new Error(data.error);
   }
 
-  throw new Error(`Failed to factor ${n} after ${maxAttempts} attempts`);
+  const p = BigInt(String(data.p));
+  const q = BigInt(String(data.q));
+  if (p * q !== n) {
+    throw new Error(`Quantum factorizer returned (${p}, ${q}) which do not multiply to ${n}`);
+  }
+
+  return {
+    p: p <= q ? p : q,
+    q: p <= q ? q : p,
+    backend: (data.backend as string | null) ?? null,
+    jobId: (data.job_id as string | null) ?? null,
+    mode: String(data.mode ?? "unknown"),
+    order: data.order == null ? null : Number(data.order),
+    base: data.base == null ? null : Number(data.base),
+    shots: Number(data.shots ?? 0),
+    raw: data,
+  };
 }
 
-function orderedFactors(a: bigint, b: bigint): Factors {
-  return a <= b ? { p: a, q: b } : { p: b, q: a };
+function runPython(python: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, args, {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", (err) => {
+      reject(
+        new Error(
+          `Failed to start Python (${python}). Install Python 3.11+ and run: pip install -r quantum/requirements.txt\n${err.message}`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        try {
+          const errJson = JSON.parse(stdout) as { error?: string };
+          if (errJson.error) {
+            reject(new Error(errJson.error));
+            return;
+          }
+        } catch {
+          // fall through
+        }
+        reject(
+          new Error(
+            `Live Shor process failed (exit ${code}).\n${(stdout + stderr).trim() || "No output"}\n\n` +
+              "Set IBM_QUANTUM_TOKEN from https://quantum.cloud.ibm.com/ and install:\n" +
+              "  pip install -r quantum/requirements.txt",
+          ),
+        );
+        return;
+      }
+
+      const line = stdout
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .at(-1);
+      if (!line) {
+        reject(new Error(`Live Shor produced no JSON.\n${stderr}`));
+        return;
+      }
+      resolve(line);
+    });
+  });
 }

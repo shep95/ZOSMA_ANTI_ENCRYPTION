@@ -1,93 +1,119 @@
 /**
- * End-to-end demo matching Breaking_RSA.ipynb:
- * generate RSA → encrypt → decrypt → factor N with Shor → recover d → crack.
- *
- * See NARRATIVE.md for the story this program implements.
+ * Live end-to-end attack:
+ * real RSA → encrypt → factor N on IBM Quantum with Shor → recover d → decrypt.
  */
 
 import {
-  decrypt,
-  encrypt,
+  decryptMessage,
+  encryptMessage,
   formatCiphertext,
-  generateKeypair,
+  generateLiveKeypair,
   recoverPrivateKey,
 } from "./rsa.js";
 import { shorsBreaker } from "./shor.js";
 
-function parseArgs(argv: string[]): { bitLength: number; message: string } {
-  let bitLength = 8;
-  let message = "7enTropy7";
+function parseArgs(argv: string[]): {
+  modulus: 15 | 21;
+  message: string;
+  shots: number;
+  backend?: string;
+} {
+  let modulus: 15 | 21 = 15;
+  let message = "ZOSMA";
+  let shots = 4096;
+  let backend: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--bit-length" || arg === "-b") {
-      bitLength = Number(argv[++i]);
+    if (arg === "--modulus" || arg === "-n") {
+      const value = Number(argv[++i]);
+      if (value !== 15 && value !== 21) {
+        throw new Error("Live moduli supported today: 15 or 21");
+      }
+      modulus = value;
     } else if (arg === "--message" || arg === "-m") {
       message = argv[++i] ?? message;
+    } else if (arg === "--shots") {
+      shots = Number(argv[++i]);
+    } else if (arg === "--backend") {
+      backend = argv[++i];
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     }
   }
 
-  if (!Number.isInteger(bitLength) || bitLength < 4) {
-    throw new Error("bit length must be an integer >= 4");
-  }
-
-  return { bitLength, message };
+  return { modulus, message, shots, backend };
 }
 
 function printHelp(): void {
   console.log(`Usage: npm start -- [options]
 
+Live RSA break using Shor's algorithm on IBM Quantum hardware.
+
 Options:
-  -b, --bit-length <n>  RSA modulus bit length (default: 8)
-  -m, --message <text>  Plaintext to encrypt and crack (default: 7enTropy7)
-  -h, --help            Show this help
+  -n, --modulus <15|21>  RSA modulus (default: 15)
+  -m, --message <text>   Plaintext (default: ZOSMA)
+      --shots <k>        QPU shots (default: 4096)
+      --backend <name>   IBM backend (default: least busy real QPU)
+  -h, --help             Show help
+
+Requires:
+  IBM_QUANTUM_TOKEN   API token from https://quantum.cloud.ibm.com/
+  pip install -r quantum/requirements.txt
 `);
 }
 
-function main(): void {
-  const { bitLength, message } = parseArgs(process.argv.slice(2));
+async function main(): Promise<void> {
+  const { modulus, message, shots, backend } = parseArgs(process.argv.slice(2));
 
-  console.log("=== Act 1: Build a small RSA lock ===");
-  const { publicKey, privateKey, p, q } = generateKeypair(bitLength);
-  console.log(`Primes p, q: ${p}, ${q}`);
+  if (!process.env.IBM_QUANTUM_TOKEN && !process.env.QISKIT_IBM_TOKEN) {
+    console.warn(
+      "Warning: IBM_QUANTUM_TOKEN is not set. The quantum step will fail unless Qiskit has a saved account.\n",
+    );
+  }
+
+  console.log("=== Act 1: Build a live-hardware RSA lock ===");
+  const { publicKey, privateKey, p, q } = generateLiveKeypair(modulus);
+  console.log(`Secret primes p, q: ${p}, ${q}`);
   console.log(`Public key  (e, N): (${publicKey.e}, ${publicKey.n})`);
   console.log(`Private key (d, N): (${privateKey.d}, ${privateKey.n})`);
 
-  console.log("\n=== Act 2: Lock a message ===");
+  console.log("\n=== Act 2: Lock a message (real RSA) ===");
   console.log(`Plaintext: ${message}`);
-  const ciphertext = encrypt(message, publicKey);
-  console.log(`Encrypted message: ${formatCiphertext(ciphertext)}`);
+  const ciphertext = encryptMessage(message, publicKey);
+  console.log(`Encrypted digits: ${formatCiphertext(ciphertext)}`);
 
-  const legit = decrypt(ciphertext, privateKey);
+  const legit = decryptMessage(ciphertext, privateKey);
   console.log(`Decrypted with real private key: ${legit}`);
   if (legit !== message) {
     throw new Error("Legitimate RSA decrypt failed");
   }
 
-  console.log("\n=== Act 3: Factor N with Shor's procedure ===");
-  const N = publicKey.n;
-  const factors = shorsBreaker(N);
-  console.log(`Factored N=${N} into (${factors.p}, ${factors.q})`);
-
-  if (factors.p * factors.q !== N) {
-    throw new Error("Factorization does not multiply back to N");
-  }
+  console.log("\n=== Act 3: Factor N on live IBM Quantum (Shor) ===");
+  console.log("Submitting order-finding circuit to a real QPU…");
+  const factors = await shorsBreaker(publicKey.n, { shots, backend });
+  console.log(`Mode: ${factors.mode}`);
+  if (factors.backend) console.log(`Backend: ${factors.backend}`);
+  if (factors.jobId) console.log(`Job ID: ${factors.jobId}`);
+  if (factors.order != null) console.log(`Recovered order r: ${factors.order}`);
+  console.log(`Factored N=${publicKey.n} into (${factors.p}, ${factors.q})`);
 
   console.log("\n=== Act 4: Forge private key and read the message ===");
   const crackedKey = recoverPrivateKey(publicKey, factors.p, factors.q);
   console.log(`Recovered private exponent d: ${crackedKey.d}`);
 
-  const cracked = decrypt(ciphertext, crackedKey);
-  console.log(`Message cracked using Shor's algorithm: ${cracked}`);
+  const cracked = decryptMessage(ciphertext, crackedKey);
+  console.log(`Message cracked via live Shor: ${cracked}`);
 
   if (cracked !== message) {
     throw new Error("Crack failed: plaintext mismatch");
   }
 
-  console.log("\nSuccess: ciphertext recovered without the original private key.");
+  console.log("\nSuccess: ciphertext recovered using factors from a live quantum job.");
 }
 
-main();
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

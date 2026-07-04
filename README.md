@@ -1,23 +1,15 @@
 # ZOSMA Anti-Encryption
 
-**Educational cryptanalysis lab** — break toy RSA by factoring the public modulus with Shor’s algorithm.
+**Live cryptanalysis lab** — break real toy RSA by factoring `N` with **Shor’s algorithm on IBM Quantum hardware**.
 
-> Teaching demo only. Classical period finding on small moduli. Not a weapon against real-world RSA.
+No classical period-finding stand-in. No fake quantum stub. The order-finding circuit is built in Qiskit, transpiled to a physical backend, and executed with Runtime `SamplerV2`.
+
+> Lab-scale only (`N ∈ {15, 21}`). Production RSA is out of reach of today’s QPUs — the algorithm and hardware path are real; the modulus is necessarily tiny.
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Qiskit](https://img.shields.io/badge/Qiskit-IBM%20Quantum-6929C4?logo=qiskit&logoColor=white)](https://quantum.cloud.ibm.com/)
 [![License](https://img.shields.io/badge/license-see%20LICENSE-blue)](./LICENSE)
-[![Status](https://img.shields.io/badge/status-runnable-success)](#quickstart)
-
----
-
-## Why this exists
-
-RSA’s public key exposes `N = p × q`. If you can factor `N`, you can rebuild the private exponent and read ciphertext that was never meant for you.
-
-This repo turns that idea into a **runnable TypeScript workflow**: generate a toy lock, encrypt a message, factor `N` with Shor’s control flow, recover `d`, and decrypt — without the original private key.
-
-Full story: [NARRATIVE.md](./NARRATIVE.md)
 
 ---
 
@@ -25,114 +17,136 @@ Full story: [NARRATIVE.md](./NARRATIVE.md)
 
 ```mermaid
 flowchart TB
-  subgraph CLI["CLI Surface"]
-    DEMO["npm run demo<br/>end-to-end crack"]
-    FACTOR["npm run factor<br/>factor N only"]
+  subgraph TS["TypeScript control plane"]
+    DEMO["npm run demo"]
+    RSA["rsa.ts — real RSA + base-N codec"]
+    SHOR_TS["shor.ts — spawns live factorizer"]
   end
 
-  subgraph Core["Core Modules"]
-    RSA["rsa.ts<br/>keygen · encrypt · decrypt"]
-    SHOR["shor.ts<br/>period find · factor"]
-    MATH["math.ts<br/>gcd · modPow · modInverse"]
+  subgraph PY["Python quantum engine"]
+    CIRCUIT["shor_live.py — QPE + mod-multiply unitaries"]
+    RUNTIME["Qiskit Runtime SamplerV2"]
+  end
+
+  subgraph QPU["IBM Quantum hardware"]
+    BACKEND["Least-busy real backend<br/>simulator=False"]
   end
 
   DEMO --> RSA
-  DEMO --> SHOR
-  FACTOR --> SHOR
-  RSA --> MATH
-  SHOR --> MATH
+  DEMO --> SHOR_TS
+  SHOR_TS -->|subprocess JSON| CIRCUIT
+  CIRCUIT --> RUNTIME
+  RUNTIME --> BACKEND
+  BACKEND -->|phase histogram| CIRCUIT
+  CIRCUIT -->|p, q, job_id| SHOR_TS
+  SHOR_TS --> RSA
 ```
 
-| Module | Responsibility |
+| Layer | Role |
 | --- | --- |
-| `src/rsa.ts` | Toy RSA keypair, encrypt, decrypt, recover `d` from factors |
-| `src/shor.ts` | Shor factoring loop + classical period finding |
-| `src/math.ts` | BigInt arithmetic primitives |
-| `src/index.ts` | Full attack demo CLI |
-| `src/factor.ts` | Standalone factorizer CLI |
+| `src/rsa.ts` | Real RSA keygen / encrypt / decrypt / recover `d` |
+| `src/shor.ts` | Invokes the live quantum engine |
+| `quantum/shor_live.py` | Builds and runs the Shor order-finding circuit on a QPU |
+| `src/index.ts` | End-to-end attack CLI |
 
 ---
 
-## Attack workflow
-
-End-to-end path implemented by `npm run demo`:
+## Live attack workflow
 
 ```mermaid
 sequenceDiagram
-  participant U as Operator
-  participant RSA as RSA Module
-  participant SHOR as Shor Module
-  participant CT as Ciphertext
+  participant Op as Operator
+  participant RSA as RSA (TypeScript)
+  participant Q as shor_live.py
+  participant IBM as IBM Quantum QPU
 
-  U->>RSA: generateKeypair(bitLength)
-  RSA-->>U: public (e, N), private (d, N)
+  Op->>RSA: generateLiveKeypair(N=15)
+  RSA-->>Op: public (e, N), private (d, N)
 
-  U->>RSA: encrypt(message, public)
-  RSA-->>CT: ciphertext[]
+  Op->>RSA: encryptMessage(plaintext, public)
+  RSA-->>Op: ciphertext digits
 
-  U->>RSA: decrypt(ciphertext, private)
-  RSA-->>U: plaintext (sanity check)
+  Op->>Q: factor N (coprime base a)
+  Q->>Q: Build QPE circuit M_a^(2^k)
+  Q->>IBM: SamplerV2.run(transpiled, shots)
+  IBM-->>Q: phase bitstring histogram
+  Q->>Q: continued fractions → order r
+  Q->>Q: gcd(a^(r/2)±1, N) → (p, q)
+  Q-->>Op: factors + job_id + backend
 
-  U->>SHOR: shorsBreaker(N)
-  Note over SHOR: pick a → find period r<br/>gcd(a^(r/2) ± 1, N)
-  SHOR-->>U: factors (p, q)
-
-  U->>RSA: recoverPrivateKey(public, p, q)
-  RSA-->>U: forged (d′, N)
-
-  U->>RSA: decrypt(ciphertext, forged)
-  RSA-->>U: cracked plaintext
+  Op->>RSA: recoverPrivateKey(public, p, q)
+  RSA-->>Op: forged d
+  Op->>RSA: decryptMessage(ciphertext, forged)
+  RSA-->>Op: plaintext
 ```
 
-### Shor factoring loop
+### Quantum order-finding circuit
 
 ```mermaid
-flowchart TD
-  A([Start with N]) --> B[Pick random base a]
-  B --> C{gcd(a, N) = 1?}
-  C -->|No| D[Return factors from gcd]
-  C -->|Yes| E[Find period r of a mod N]
-  E --> F{r even and<br/>a^(r/2) ≢ −1 mod N?}
-  F -->|No| B
-  F -->|Yes| G["p = gcd(a^(r/2)+1, N)<br/>q = gcd(a^(r/2)−1, N)"]
-  G --> H{Nontrivial factors?}
-  H -->|No| B
-  H -->|Yes| I([Return p, q])
-  D --> I
+flowchart LR
+  H[Hadamards on phase register] --> CU[Controlled modular multiply<br/>a^(2^k) mod N]
+  CU --> IQFT[Inverse QFT]
+  IQFT --> M[Measure phase register]
+  M --> CF[Continued fractions]
+  CF --> R[Order r]
+  R --> G[gcd factors]
 ```
 
-On a large quantum computer, **period finding** is the quantum step. Here it runs **classically** so the lab works on any laptop — same control flow, educational moduli only.
+For `N = 15`, modular multiplies use the compiled `SWAP` networks from IBM’s [Shor’s algorithm tutorial](https://quantum.cloud.ibm.com/docs/tutorials/shors-algorithm). Other live moduli use unitary modular-multiplication gates.
 
 ---
 
-## Quickstart
+## Prerequisites
+
+1. **Node.js 18+**
+2. **Python 3.11+**
+3. **IBM Quantum account** and API token from [quantum.cloud.ibm.com](https://quantum.cloud.ibm.com/)
+
+```bash
+# Node deps
+npm install
+
+# Quantum engine
+pip install -r quantum/requirements.txt
+
+# Live credentials (PowerShell)
+$env:IBM_QUANTUM_TOKEN = "your_token_here"
+
+# Live credentials (bash)
+export IBM_QUANTUM_TOKEN=your_token_here
+```
+
+Optional:
+
+| Variable | Purpose |
+| --- | --- |
+| `IBM_QUANTUM_CHANNEL` | Default `ibm_quantum_platform` |
+| `IBM_QUANTUM_INSTANCE` | Runtime instance, if your account requires one |
+| `PYTHON` | Python executable if not on `PATH` as `python` |
+
+---
+
+## Quickstart (live QPU)
 
 ```bash
 git clone https://github.com/shep95/ZOSMA_ANTI_ENCRYPTION.git
 cd ZOSMA_ANTI_ENCRYPTION
 npm install
+pip install -r quantum/requirements.txt
+export IBM_QUANTUM_TOKEN=…   # required
+
 npm run demo
 ```
 
-Expected shape of output:
+This will:
 
-```text
-=== Act 1: Build a small RSA lock ===
-Primes p, q: …
-Public key  (e, N): …
+1. Build an RSA keypair with `N = 15`
+2. Encrypt `ZOSMA` with real modular exponentiation
+3. Submit a Shor order-finding circuit to a **real** IBM backend
+4. Recover `(p, q)` from the hardware histogram
+5. Forge `d` and decrypt
 
-=== Act 2: Lock a message ===
-Encrypted message: …
-Decrypted with real private key: 7enTropy7
-
-=== Act 3: Factor N with Shor's procedure ===
-Factored N=… into (p, q)
-
-=== Act 4: Forge private key and read the message ===
-Message cracked using Shor's algorithm: 7enTropy7
-
-Success: ciphertext recovered without the original private key.
-```
+Expect queue time on the public IBM Quantum fleet.
 
 ---
 
@@ -140,77 +154,54 @@ Success: ciphertext recovered without the original private key.
 
 | Command | What it does |
 | --- | --- |
-| `npm run demo` | Full RSA generate → encrypt → factor → crack |
-| `npm start -- -b 10 -m "secret"` | Custom bit length and message |
-| `npm run factor -- 21` | Factor a single integer (e.g. `21 → 3 × 7`) |
-| `npm run build` | Emit `dist/` via `tsc` |
+| `npm run demo` | Full live attack (`N=15`, message `ZOSMA`) |
+| `npm start -- -n 21 -m "hi"` | Live attack with `N=21` |
+| `npm run factor -- 15` | Factor `15` on hardware only |
+| `npm run quantum:factor -- --n 15 --json` | Call the Python engine directly |
+| `npm run build` | Compile TypeScript to `dist/` |
 
-### CLI options (`npm start`)
+### CLI flags
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-b`, `--bit-length` | Modulus size in bits (4–24) | `8` |
-| `-m`, `--message` | Plaintext to encrypt and crack | `7enTropy7` |
-| `-h`, `--help` | Show help | — |
+| `-n`, `--modulus` | `15` or `21` | `15` |
+| `-m`, `--message` | Plaintext | `ZOSMA` |
+| `--shots` | QPU shots | `4096` |
+| `--backend` | Explicit IBM backend name | least-busy **real** QPU |
 
 ---
 
-## Developer workflow
+## Threat model
 
 ```mermaid
 flowchart LR
-  A[Clone] --> B[npm install]
-  B --> C{Goal?}
-  C -->|Learn the attack| D[npm run demo]
-  C -->|Factor only| E[npm run factor -- N]
-  C -->|Ship JS| F[npm run build]
-  F --> G[node dist/index.js …]
-  D --> H[Read NARRATIVE.md]
-  E --> H
-```
-
-```bash
-# interactive-style run
-npm start -- --bit-length 12 --message "hello"
-
-# compile + run artifacts
-npm run build
-node dist/index.js --bit-length 8 --message "7enTropy7"
-```
-
----
-
-## Threat model (lab scope)
-
-```mermaid
-flowchart LR
-  subgraph Public["Attacker can see"]
+  subgraph Visible["Attacker visible"]
     PK["Public key (e, N)"]
     CT["Ciphertext"]
   end
 
-  subgraph Secret["Attacker must not need"]
-    SK["Original private key (d, N)"]
+  subgraph Hidden["Not required"]
+    SK["Original private key"]
   end
 
-  subgraph Recovered["Attacker recovers"]
+  subgraph Live["Live recovery"]
+    QPU["IBM QPU order finding"]
     PQ["Factors p, q"]
     DK["Forged d"]
     PT["Plaintext"]
   end
 
-  PK --> PQ
-  PQ --> DK
-  DK --> PT
+  PK --> QPU --> PQ --> DK
   CT --> PT
+  DK --> PT
   SK -.->|bypassed| PT
 ```
 
 | In scope | Out of scope |
 | --- | --- |
-| Toy RSA (≈8–16 bit moduli) | Production RSA / TLS / real keys |
-| Classical period finding | Real quantum hardware |
-| Character-wise educational cipher | Padding, OAEP, hybrid encryption |
+| Real RSA for `N ∈ {15, 21}` | Production RSA / TLS |
+| Real Shor QPE on IBM hardware | Classical order-finding shortcuts |
+| Continued-fraction post-processing | Fault-tolerant cryptanalysis of large keys |
 
 ---
 
@@ -218,29 +209,29 @@ flowchart LR
 
 ```text
 ZOSMA_ANTI_ENCRYPTION/
-├── NARRATIVE.md          # Story distilled from the original notebooks
+├── NARRATIVE.md
 ├── src/
-│   ├── index.ts          # End-to-end crack demo
-│   ├── factor.ts         # Standalone factorizer
-│   ├── rsa.ts            # Toy RSA
-│   ├── shor.ts           # Shor factoring
-│   └── math.ts           # BigInt helpers
-├── Breaking_RSA.ipynb    # Original notebook (reference)
-├── Factorizer_Quantum_Simulator.ipynb
-└── RSA_module.py         # Original Python RSA (reference)
+│   ├── index.ts          # End-to-end live attack
+│   ├── factor.ts         # Factor-only CLI
+│   ├── rsa.ts            # Real RSA
+│   ├── shor.ts           # Quantum engine bridge
+│   └── math.ts
+├── quantum/
+│   ├── shor_live.py      # Live Shor on IBM Quantum
+│   └── requirements.txt
+└── package.json
 ```
 
 ---
 
-## Requirements
+## References
 
-- **Node.js** 18+
-- **npm** 9+
-
----
+- IBM Quantum — [Shor’s algorithm tutorial](https://quantum.cloud.ibm.com/docs/tutorials/shors-algorithm)
+- Qiskit Runtime — [V2 primitives](https://quantum.cloud.ibm.com/docs/en/guides/v2-primitives)
+- Story form of this lab — [NARRATIVE.md](./NARRATIVE.md)
 
 ## License & security
 
 See [LICENSE](./LICENSE) and [SECURITY.md](./SECURITY.md).
 
-This repository is for **cryptography education and post-quantum awareness**. Do not use it against systems you do not own or lack permission to test.
+For education and post-quantum awareness only. Do not attack systems you do not own or lack permission to test.
