@@ -36,6 +36,13 @@ export type BreakAttempt = {
   recoveredPlaintext?: string;
   method: string;
   detail: string;
+  /** Per-check evidence when a security narrative was evaluated. */
+  narrativeChecks?: Array<{
+    id: string;
+    outcome: string;
+    attack: string;
+    detail: string;
+  }>;
 };
 
 export type BreakReport = {

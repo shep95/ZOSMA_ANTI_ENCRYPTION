@@ -50,11 +50,15 @@ function main(): void {
     console.log("answers.json is not opened by this process.");
     const report = runBlindBreak(paths.publicPath, paths.reportPath);
     for (const a of report.attempts) {
-      console.log(
-        `[${a.status.toUpperCase()}] ${a.id} — ${a.method}` +
-          (a.recoveredPlaintext ? `\n  recovered: ${a.recoveredPlaintext}` : "") +
-          `\n  ${a.detail}`,
-      );
+      console.log(`\n[${a.status.toUpperCase()}] ${a.id} — ${a.method}`);
+      if (a.recoveredPlaintext) console.log(`  recovered: ${a.recoveredPlaintext}`);
+      if (a.narrativeChecks?.length) {
+        for (const c of a.narrativeChecks) {
+          console.log(`  [${c.outcome}] ${c.id}: ${c.detail}`);
+        }
+      } else {
+        console.log(`  ${a.detail}`);
+      }
     }
     console.log(`\nWrote ${paths.reportPath}`);
     log.info("blind_break_done", {
@@ -87,10 +91,18 @@ function main(): void {
     const report = runBlindBreak(paths.publicPath, paths.reportPath);
     console.log("=== BLIND BREAK (public.json only) ===\n");
     for (const a of report.attempts) {
-      console.log(
-        `[${a.status.toUpperCase()}] ${a.id}` +
-          (a.recoveredPlaintext ? ` -> ${a.recoveredPlaintext}` : ` -> (${a.detail})`),
-      );
+      console.log(`\n[${a.status.toUpperCase()}] ${a.id} (${a.method})`);
+      if (a.recoveredPlaintext) {
+        console.log(`  recovered: ${a.recoveredPlaintext}`);
+      }
+      if (a.narrativeChecks?.length) {
+        console.log("  AES-256-GCM narrative checks:");
+        for (const c of a.narrativeChecks) {
+          console.log(`    [${c.outcome}] ${c.id}: ${c.detail}`);
+        }
+      } else if (!a.recoveredPlaintext) {
+        console.log(`  ${a.detail}`);
+      }
     }
     console.log("\n=== REFEREE SCORE (answers opened only here) ===\n");
     const score = scoreBlind(paths.answersPath, paths.reportPath);

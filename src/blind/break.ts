@@ -7,6 +7,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { decodeMessage, decryptDigits, recoverPrivateKey } from "../rsa.js";
+import {
+  AES256_GCM_NARRATIVE,
+  attackAes256GcmUnderNarrative,
+  formatNarrativeReport,
+  parseGcmPublicPayload,
+  type GcmPublicBlob,
+} from "./gcm-narrative.js";
 import type {
   BreakAttempt,
   BreakReport,
@@ -20,7 +27,10 @@ export function runBlindBreak(publicPath: string, reportPath: string): BreakRepo
     throw new Error("Invalid public challenge file");
   }
 
-  const attempts: BreakAttempt[] = file.challenges.map((challenge) => attack(challenge));
+  const gcmBlobs = collectGcmBlobs(file.challenges);
+  const attempts: BreakAttempt[] = file.challenges.map((challenge) =>
+    attack(challenge, gcmBlobs),
+  );
 
   const report: BreakReport = {
     version: 1,
@@ -31,10 +41,23 @@ export function runBlindBreak(publicPath: string, reportPath: string): BreakRepo
   return report;
 }
 
-function attack(challenge: PublicChallenge): BreakAttempt {
+function collectGcmBlobs(challenges: PublicChallenge[]): Map<string, GcmPublicBlob> {
+  const map = new Map<string, GcmPublicBlob>();
+  for (const challenge of challenges) {
+    if (challenge.algorithm !== "aes-256-gcm") continue;
+    const blob = parseGcmPublicPayload(challenge.payload);
+    if (blob) map.set(challenge.id, blob);
+  }
+  return map;
+}
+
+function attack(
+  challenge: PublicChallenge,
+  gcmBlobs: Map<string, GcmPublicBlob>,
+): BreakAttempt {
   switch (challenge.algorithm) {
     case "aes-256-gcm":
-      return attackHardenedGcm(challenge);
+      return attackHardenedGcm(challenge, gcmBlobs);
     case "aes-256-ctr":
       return attackNonceReuseCtr(challenge);
     case "textbook-rsa":
@@ -49,30 +72,62 @@ function attack(challenge: PublicChallenge): BreakAttempt {
   }
 }
 
-/** Proper AEAD with unknown key: cannot open. */
-function attackHardenedGcm(challenge: PublicChallenge): BreakAttempt {
-  const { ciphertextHex, tagHex, nonceHex } = challenge.payload;
-  if (
-    typeof ciphertextHex !== "string" ||
-    typeof tagHex !== "string" ||
-    typeof nonceHex !== "string"
-  ) {
+/**
+ * AES-256-GCM under NIST SP 800-38D narrative.
+ * Runs every applicable attack class; holds when all are blocked.
+ */
+function attackHardenedGcm(
+  challenge: PublicChallenge,
+  gcmBlobs: Map<string, GcmPublicBlob>,
+): BreakAttempt {
+  const blob = parseGcmPublicPayload(challenge.payload);
+  if (!blob) {
     return {
       id: challenge.id,
       status: "failed",
-      method: "gcm-bruteforce-rejected",
-      detail: "Malformed public payload.",
+      method: "gcm-narrative-malformed",
+      detail: "Malformed public GCM payload.",
     };
   }
 
-  // Blind attacker has no key. Exhaustive search of 2^256 is infeasible.
+  const siblings = [...gcmBlobs.entries()]
+    .filter(([id]) => id !== challenge.id)
+    .map(([, b]) => b);
+
+  const report = attackAes256GcmUnderNarrative(blob, siblings);
+  const narrativeChecks = report.checks.map((c) => ({
+    id: c.id,
+    outcome: c.outcome,
+    attack: c.attack,
+    detail: c.detail,
+  }));
+
+  if (report.plaintextRecovered && report.recoveredPlaintext) {
+    return {
+      id: challenge.id,
+      status: "broken",
+      method: "gcm-narrative-violation",
+      recoveredPlaintext: report.recoveredPlaintext,
+      detail: formatNarrativeReport(report),
+      narrativeChecks,
+    };
+  }
+
+  const blocked = report.checks.filter((c) => c.outcome === "blocked").length;
+  const na = report.checks.filter((c) => c.outcome === "n/a").length;
+  const vulnerable = report.checks.filter((c) => c.outcome === "vulnerable").length;
+
   return {
     id: challenge.id,
     status: "failed",
-    method: "no-key-aes-256-gcm",
+    method: "aes-256-gcm-narrative-held",
     detail:
-      "AES-256-GCM with unknown key and unique nonce: no feasible blind recovery. " +
-      `Public blob sizes ct=${ciphertextHex.length / 2}B tag=${tagHex.length / 2}B nonce=${nonceHex.length / 2}B.`,
+      `${AES256_GCM_NARRATIVE.standard}: ${report.summary} ` +
+      `(blocked=${blocked}, n/a=${na}, vulnerable=${vulnerable}). ` +
+      `Hardness: classical 2^${AES256_GCM_NARRATIVE.hardness.classicalKeySearchBits}, ` +
+      `tag 2^${AES256_GCM_NARRATIVE.hardness.tagBits}. ` +
+      formatNarrativeReport(report),
+    narrativeChecks,
   };
 }
 
@@ -143,7 +198,6 @@ function attackTextbookRsa(challenge: PublicChallenge): BreakAttempt {
   const n = BigInt(nRaw);
   const digits = digitsRaw.map((d) => BigInt(String(d)));
 
-  // Blind factoring of public N (trial division — works for live-demo moduli 15/21).
   const factors = trialFactor(n);
   if (!factors) {
     return {
@@ -187,7 +241,11 @@ function xor(a: Buffer, b: Buffer): Buffer {
   return out;
 }
 
-export function defaultPaths(root: string): { publicPath: string; reportPath: string; answersPath: string } {
+export function defaultPaths(root: string): {
+  publicPath: string;
+  reportPath: string;
+  answersPath: string;
+} {
   const dir = path.join(root, "challenges", "blind");
   return {
     publicPath: path.join(dir, "public.json"),

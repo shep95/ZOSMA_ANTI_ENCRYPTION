@@ -62,8 +62,10 @@ export function generateBlindChallenges(outDir: string): {
       tier: "ha.aes256_gcm_hsm",
       algorithm: "aes-256-gcm",
       publicProtocolNotes:
-        "Unique nonce, secret 256-bit key, AAD-bound. No key or nonce reuse in public set.",
+        "NIST SP 800-38D AES-256-GCM: secret 256-bit key withheld; unique 96-bit nonce; AAD-bound; 128-bit tag; verify-then-decrypt. Public fields only: nonce, AAD, C, T.",
       payload: {
+        narrativeId: "aes-256-gcm",
+        standard: "NIST SP 800-38D",
         nonceHex: box.nonce.toString("hex"),
         ciphertextHex: box.ciphertext.toString("hex"),
         tagHex: box.tag.toString("hex"),
@@ -170,8 +172,11 @@ export function generateBlindChallenges(outDir: string): {
       id: "ha1-gcm-hardened-2",
       tier: "ha.aes256_gcm_hsm",
       algorithm: "aes-256-gcm",
-      publicProtocolNotes: "Second independent AES-256-GCM seal. Key withheld. Unique nonce.",
+      publicProtocolNotes:
+        "Second independent NIST SP 800-38D AES-256-GCM seal. Key withheld. Unique nonce. Public fields only: nonce, AAD, C, T.",
       payload: {
+        narrativeId: "aes-256-gcm",
+        standard: "NIST SP 800-38D",
         nonceHex: box.nonce.toString("hex"),
         ciphertextHex: box.ciphertext.toString("hex"),
         tagHex: box.tag.toString("hex"),
