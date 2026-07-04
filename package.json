@@ -18,6 +18,7 @@
     "blind": "tsx src/blind-cli.ts",
     "blind:live": "tsx src/blind-cli.ts live",
     "gcm-bypass": "tsx src/gcm-bypass-cli.ts",
+    "gcm-beyond": "tsx src/gcm-beyond-cli.ts",
     "quantum:install": "python -m pip install -r quantum/requirements.txt",
     "quantum:factor": "python quantum/shor_live.py"
   },
